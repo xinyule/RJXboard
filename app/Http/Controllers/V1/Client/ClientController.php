@@ -48,6 +48,18 @@ class ClientController extends Controller
             return response('', 403, ['Content-Type' => 'text/plain']);
         }
 
+        // Fix (v1.0.1): subscription must also respect remaining traffic.
+        // isAvailable() is shared with knowledge/docs and other endpoints,
+        // so it is intentionally left alone; the subscription entry point
+        // additionally mirrors the node-sync rule (u + d < transfer_enable).
+        // Previously a traffic-exhausted user still got a full node list
+        // here and only failed later, at node-sync time.
+        $usedTraffic = ($user->u ?? 0) + ($user->d ?? 0);
+        if ($user->transfer_enable && $usedTraffic >= $user->transfer_enable) {
+            HookManager::call('client.subscribe.unavailable');
+            return response('', 403, ['Content-Type' => 'text/plain']);
+        }
+
         return $this->doSubscribe($request, $user);
     }
 

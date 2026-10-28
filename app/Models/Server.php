@@ -566,8 +566,19 @@ class Server extends Model
 
         $now = now()->format('H:i');
         $ranges = $this->rate_time_ranges ?? [];
+        // Fix (v1.0.1): a range crossing midnight (e.g. 22:00-02:00) never
+        // matched the old "start <= now <= end" test. For start > end the
+        // range wraps: it matches when now is after start OR before end.
         $matchedRange = collect($ranges)
-            ->first(fn($range) => $now >= $range['start'] && $now <= $range['end']);
+            ->first(function ($range) use ($now) {
+                if (!isset($range['start'], $range['end'])) {
+                    return false;
+                }
+                if ($range['start'] <= $range['end']) {
+                    return $now >= $range['start'] && $now <= $range['end'];
+                }
+                return $now >= $range['start'] || $now <= $range['end'];
+            });
         
         return $matchedRange ? (float) $matchedRange['rate'] : (float) $this->rate;
     }

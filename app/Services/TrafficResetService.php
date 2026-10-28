@@ -25,16 +25,28 @@ class TrafficResetService
       return false;
     }
 
-    return $this->performReset($user, $triggerSource);
+    // Automatic paths must re-check "still due" after locking; explicit
+    // resets (order / gift card) must NOT, they are meant to reset now.
+    return $this->performReset($user, $triggerSource, true);
   }
 
   /**
    * Perform the traffic reset for a user.
    */
-  public function performReset(User $user, string $triggerSource = TrafficResetLog::SOURCE_MANUAL): bool
+  public function performReset(User $user, string $triggerSource = TrafficResetLog::SOURCE_MANUAL, bool $requireDue = false): bool
   {
     try {
-      return DB::transaction(function () use ($user, $triggerSource) {
+      return DB::transaction(function () use ($user, $triggerSource, $requireDue) {
+        // Fix (v1.0.1): re-read with a row lock. Previously the
+        // pre-transaction check plus an unlocked update let concurrent
+        // cron / user-access / order-open paths reset twice,
+        // double-counting reset_count and wiping traffic reported between
+        // the two resets. When $requireDue is true (automatic paths), a
+        // reset that is no longer due after locking is skipped.
+        $user = User::lockForUpdate()->find($user->id);
+        if (!$user || ($requireDue && !$user->shouldResetTraffic())) {
+          return false;
+        }
         $oldUpload = $user->u ?? 0;
         $oldDownload = $user->d ?? 0;
         $oldTotal = $oldUpload + $oldDownload;
@@ -131,7 +143,11 @@ class TrafficResetService
     $resetDay = $expiredAt->day;
     $resetTime = [$expiredAt->hour, $expiredAt->minute, $expiredAt->second];
     
-    $currentMonthTarget = $from->copy()->day($resetDay)->setTime(...$resetTime);
+    // Fix (v1.0.1): clamp the reset day to the current month's length.
+    // Previously day(31) in February overflowed to March, silently
+    // skipping that month's reset. The next-month branch already clamped;
+    // the current-month branch did not.
+    $currentMonthTarget = $from->copy()->day(min($resetDay, $from->daysInMonth))->setTime(...$resetTime);
     if ($currentMonthTarget->timestamp > $from->timestamp) {
       return $currentMonthTarget;
     }
@@ -173,7 +189,10 @@ class TrafficResetService
     $resetDay = $expiredAt->day;
     $resetTime = [$expiredAt->hour, $expiredAt->minute, $expiredAt->second];
 
-    $currentYearTarget = $from->copy()->month($resetMonth)->day($resetDay)->setTime(...$resetTime);
+    // Fix (v1.0.1): same clamp as monthly: Feb 29 in a non-leap year
+    // must land on Feb 28, not overflow into March.
+    $currentYearMonth = $from->copy()->month($resetMonth);
+    $currentYearTarget = $currentYearMonth->copy()->day(min($resetDay, $currentYearMonth->daysInMonth))->setTime(...$resetTime);
     if ($currentYearTarget->timestamp > $from->timestamp) {
       return $currentYearTarget;
     }

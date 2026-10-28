@@ -51,6 +51,12 @@ class ServerV2
             throw new ApiException('Server does not exist');
         }
 
+        // Fix (v1.0.1): same enabled check as the V1 middleware. The
+        // machine-token path already checks enabled; the token path did not.
+        if (!$serverInfo->enabled) {
+            throw new ApiException('Server is disabled', 403);
+        }
+
         $request->attributes->set('node_info', $serverInfo);
     }
 

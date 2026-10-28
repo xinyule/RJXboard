@@ -90,12 +90,29 @@ class Plugin extends AbstractPlugin implements PaymentInterface
             throw new ApiException('HMAC signature does not match', 400);
         }
 
+        // Fix (v1.0.1): only a confirmed charge may activate an order.
+        // Previously any signed event (charge:created / charge:pending /
+        // charge:failed) was accepted because the event type was never read.
+        if (($json_param['event']['type'] ?? null) !== 'charge:confirmed') {
+            throw new ApiException('Charge not confirmed', 400);
+        }
+
         $out_trade_no = $json_param['event']['data']['metadata']['outTradeNo'];
         $pay_trade_no = $json_param['event']['id'];
-        
+
+        // Amount in cents, for the controller's amount check. pay() creates the
+        // charge with a CNY local price, so only trust it when it matches.
+        $amountCents = null;
+        $local = $json_param['event']['data']['pricing']['local'] ?? null;
+        if (is_array($local) && isset($local['amount']) && is_numeric($local['amount'])
+            && ($local['currency'] ?? null) === 'CNY') {
+            $amountCents = (int) round((float) $local['amount'] * 100);
+        }
+
         return [
             'trade_no' => $out_trade_no,
-            'callback_no' => $pay_trade_no
+            'callback_no' => $pay_trade_no,
+            'amount_cents' => $amountCents,
         ];
     }
 

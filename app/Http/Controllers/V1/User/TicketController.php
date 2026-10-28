@@ -126,25 +126,47 @@ class TicketController extends Controller
         ) {
             return $this->fail([422, __('Unsupported withdrawal method')]);
         }
-        $user = User::find($request->user()->id);
-        $limit = admin_setting('commission_withdraw_limit', 100);
-        if ($limit > ($user->commission_balance / 100)) {
-            return $this->fail([422, __('The current required minimum withdrawal commission is :limit', ['limit' => $limit])]);
-        }
+        // Fix (v1.0.1): a withdrawal now settles against the balance at
+        // request time. Previously withdraw() only created a ticket and
+        // never deducted or froze anything, so the same commission could
+        // be withdrawn repeatedly while admin processing lagged, and the
+        // ticket did not even state the amount. Behaviour change, read
+        // carefully: the full commission_balance is deducted when the
+        // ticket is created and the amount is written into the ticket, so
+        // the admin pays exactly that amount. If the admin rejects the
+        // request, they must refund by editing the user's
+        // commission_balance back (the admin user-update path already
+        // allows that). An already-open ticket still blocks a second
+        // request via TicketService::createTicket().
+        $ticket = null;
         try {
-            $ticketService = new TicketService();
-            $subject = __('[Commission Withdrawal Request] This ticket is opened by the system');
-            $message = sprintf(
-                "%s\r\n%s",
-                __('Withdrawal method') . "：" . $request->input('withdraw_method'),
-                __('Withdrawal account') . "：" . $request->input('withdraw_account')
-            );
-            $ticket = $ticketService->createTicket(
-                $request->user()->id,
-                $subject,
-                2,
-                $message
-            );
+            \Illuminate\Support\Facades\DB::transaction(function () use ($request, &$ticket) {
+                $user = User::lockForUpdate()->find($request->user()->id);
+                if (!$user) {
+                    throw new \App\Exceptions\ApiException(__('User does not exist'));
+                }
+                $limit = admin_setting('commission_withdraw_limit', 100);
+                if ($limit > ($user->commission_balance / 100)) {
+                    throw new \App\Exceptions\ApiException(__('The current required minimum withdrawal commission is :limit', ['limit' => $limit]), 422);
+                }
+                $withdrawAmount = (int) $user->commission_balance;
+                $user->commission_balance = 0;
+                $user->save();
+                $ticketService = new TicketService();
+                $subject = __('[Commission Withdrawal Request] This ticket is opened by the system');
+                $message = sprintf(
+                    "%s\r\n%s\r\n%s",
+                    __('Withdrawal method') . "：" . $request->input('withdraw_method'),
+                    __('Withdrawal account') . "：" . $request->input('withdraw_account'),
+                    __('Withdrawal amount') . "：" . number_format($withdrawAmount / 100, 2)
+                );
+                $ticket = $ticketService->createTicket(
+                    $request->user()->id,
+                    $subject,
+                    2,
+                    $message
+                );
+            });
         } catch (\Exception $e) {
             throw $e;
         }

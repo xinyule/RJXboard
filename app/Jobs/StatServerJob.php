@@ -59,9 +59,14 @@ class StatServerJob implements ShouldQueue
             $d += $traffic[1];
         }
 
+        // Fix (v1.0.1): stat row and server traffic must commit together.
+        // Previously the stat row could commit and then updateServerTraffic
+        // fail, so the queue retry added the same traffic a second time.
         try {
-            $this->processServerStat($u, $d, $recordAt);
-            $this->updateServerTraffic($u, $d);
+            DB::transaction(function () use ($u, $d, $recordAt) {
+                $this->processServerStat($u, $d, $recordAt);
+                $this->updateServerTraffic($u, $d);
+            });
         } catch (\Exception $e) {
             Log::error('StatServerJob failed for server ' . $this->server['id'] . ': ' . $e->getMessage());
             throw $e;

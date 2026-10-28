@@ -20,8 +20,14 @@ class Admin
     {
         /** @var User|null $user */
         $user = Auth::guard('sanctum')->user();
-        
+
         if (!$user || !$user->is_admin) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
+        // Fix (v1.0.1): a banned admin must not keep using admin APIs on a
+        // token issued before the ban, for the same reason as User middleware.
+        if ($user->banned) {
             return response()->json(['message' => 'Unauthorized'], 403);
         }
         

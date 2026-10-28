@@ -114,6 +114,11 @@ class LoginService
             return [false, [500, __('Reset failed')]];
         }
 
+        // Fix (v1.0.1): a password reset must revoke every existing token.
+        // Previously a token stolen before the reset stayed valid, so the
+        // reset did not stop an attacker who already had a token.
+        $user->tokens()->delete();
+
         HookManager::call('user.password.reset.after', $user);
 
         // 清除邮箱验证码

@@ -14,6 +14,7 @@ use App\Utils\Dict;
 use App\Utils\Helper;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 
 class RegisterService
 {
@@ -110,7 +111,11 @@ class RegisterService
      */
     public function handleInviteCode(string $inviteCode): int|null
     {
-        $inviteCodeModel = InviteCode::where('code', $inviteCode)
+        // Fix (v1.0.1): lock the code row. This only serialises callers
+        // when register() runs it inside a transaction (see below); a
+        // lock outside a transaction would be released immediately.
+        $inviteCodeModel = InviteCode::lockForUpdate()
+            ->where('code', $inviteCode)
             ->where('status', InviteCode::STATUS_UNUSED)
             ->first();
 
@@ -151,23 +156,32 @@ class RegisterService
         $password = $request->input('password');
         $inviteCode = $request->input('invite_code');
 
-        // 处理邀请码获取邀请人ID
-        $inviteUserId = null;
-        if ($inviteCode) {
-            $inviteUserId = $this->handleInviteCode($inviteCode);
-        }
+        // Fix (v1.0.1): mark the invite code and create the user in one
+        // transaction. Previously the code was marked USED before the
+        // user was created, so two concurrent requests could both read
+        // it as unused, and a failed user save burned the code for good.
+        $user = null;
+        try {
+            $user = DB::transaction(function () use ($email, $password, $inviteCode) {
+                $inviteUserId = null;
+                if ($inviteCode) {
+                    $inviteUserId = $this->handleInviteCode($inviteCode);
+                }
 
-        // 创建用户
-        $userService = app(UserService::class);
-        $user = $userService->createUser([
-            'email' => $email,
-            'password' => $password,
-            'invite_user_id' => $inviteUserId,
-        ]);
+                $userService = app(UserService::class);
+                $created = $userService->createUser([
+                    'email' => $email,
+                    'password' => $password,
+                    'invite_user_id' => $inviteUserId,
+                ]);
 
-        // 保存用户
-        if (!$user->save()) {
-            return [false, [500, __('Register failed')]];
+                if (!$created->save()) {
+                    throw new ApiException(__('Register failed'), 500);
+                }
+                return $created;
+            });
+        } catch (ApiException $e) {
+            return [false, [$e->getCode() ?: 500, $e->getMessage()]];
         }
 
         HookManager::call('user.register.after', $user);

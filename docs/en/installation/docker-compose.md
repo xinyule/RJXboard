@@ -17,10 +17,10 @@ systemctl start docker
 
 ### 2. Deployment Steps
 
-1. Clone the `compose` branch (it ships `compose.sample.yaml` and the other `compose.*.sample.yaml` variants):
+1. Clone the repository (it ships `compose.sample.yaml` and the other `compose.*.sample.yaml` variants):
    ```bash
-   git clone -b compose --depth 1 https://github.com/cedar2025/Xboard
-   cd Xboard
+   git clone --depth 1 https://github.com/xinyule/RJXboard
+   cd RJXboard
    cp compose.sample.yaml compose.yaml
    ```
 
@@ -62,7 +62,7 @@ docker compose up -d
 ### 3. Version Updates
 
 ```bash
-cd Xboard
+cd RJXboard
 docker compose pull && docker compose up -d
 ```
 
