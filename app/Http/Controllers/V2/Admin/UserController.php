@@ -672,9 +672,20 @@ class UserController extends Controller
         } // all: ignore filter/sort
 
         try {
+            // Fix (v1.0.1): bulk bans must revoke tokens like the single-user
+            // update path already does (see update(): removeAllSessions on
+            // banned=1). Collect ids first: a mass update alone cannot
+            // delete per-user tokens.
+            $bannedIds = (clone $builder)->pluck('id')->all();
             $builder->update([
                 'banned' => 1
             ]);
+            if (!empty($bannedIds)) {
+                \Laravel\Sanctum\PersonalAccessToken::query()
+                    ->where('tokenable_type', \App\Models\User::class)
+                    ->whereIn('tokenable_id', $bannedIds)
+                    ->delete();
+            }
         } catch (\Exception $e) {
             Log::error($e);
             return $this->fail([500, '处理失败']);

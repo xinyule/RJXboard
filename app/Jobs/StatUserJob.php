@@ -51,14 +51,21 @@ class StatUserJob implements ShouldQueue
             ? strtotime(date('Y-m-01'))
             : strtotime(date('Y-m-d'));
 
-        foreach ($this->data as $uid => $v) {
-            try {
-                $this->processUserStat($uid, $v, $recordAt);
-            } catch (\Exception $e) {
-                Log::error('StatUserJob failed for user ' . $uid . ': ' . $e->getMessage());
-                throw $e;
+        // Fix (v1.0.1): process the whole batch in one transaction.
+        // Previously each user was committed separately and a failure
+        // re-threw, so the queue retry re-added every user already
+        // processed in this batch. Now a failure rolls the whole batch
+        // back, making a retry safe instead of double-counting.
+        DB::transaction(function () use ($recordAt) {
+            foreach ($this->data as $uid => $v) {
+                try {
+                    $this->processUserStat($uid, $v, $recordAt);
+                } catch (\Exception $e) {
+                    Log::error('StatUserJob failed for user ' . $uid . ': ' . $e->getMessage());
+                    throw $e;
+                }
             }
-        }
+        });
     }
 
     protected function processUserStat(int $uid, array $v, int $recordAt): void
