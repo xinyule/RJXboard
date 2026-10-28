@@ -203,8 +203,15 @@ class GiftCardTemplate extends Model
                 if ($now >= $festivalConfig['start_time'] && $now <= $festivalConfig['end_time']) {
                     $bonus = data_get($festivalConfig, 'festival_bonus', 1.0);
                     if ($bonus > 1.0) {
+                        // Fix (v1.0.1): only quantity rewards are multiplied.
+                        // Previously every numeric value was multiplied,
+                        // including plan_id (an identifier: 2 became 4 and
+                        // the reward went to the wrong plan or was dropped)
+                        // and invite_reward_rate (a ratio, which was then
+                        // applied a second time in giveInviteRewards()).
+                        $multipliable = ['balance', 'transfer_enable', 'device_limit', 'expire_days', 'plan_validity_days'];
                         foreach ($actualRewards as $key => &$value) {
-                            if (is_numeric($value)) {
+                            if (in_array($key, $multipliable, true) && is_numeric($value)) {
                                 $value = intval($value * $bonus);
                             }
                         }

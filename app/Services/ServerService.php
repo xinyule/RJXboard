@@ -126,7 +126,27 @@ class ServerService
         $data = array_filter($traffic, fn($item) =>
             is_array($item) && count($item) === 2
             && is_numeric($item[0]) && is_numeric($item[1])
+            // Fix (v1.0.1): negative traffic must not be able to offset
+            // already-used traffic.
+            && $item[0] >= 0 && $item[1] >= 0
         );
+
+        // Fix (v1.0.1): a node may only report users in its own groups, the
+        // same set getAvailableUsers() hands out. Previously any holder of
+        // the global server token could credit/debit arbitrary users.
+        if (!empty($data)) {
+            $groupIds = $node->group_ids ?? [];
+            if (empty($groupIds)) {
+                $data = [];
+            } else {
+                $allowed = \App\Models\User::query()
+                    ->whereIn('id', array_keys($data))
+                    ->whereIn('group_id', $groupIds)
+                    ->pluck('id')
+                    ->all();
+                $data = array_intersect_key($data, array_flip($allowed));
+            }
+        }
 
         if (empty($data)) {
             return;
