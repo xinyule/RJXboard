@@ -194,6 +194,9 @@ return [
     |
     */
 
-    'same_site' => null,
+    // Fix (v1.0.1): explicit Lax instead of relying on the browser
+    // default. API auth uses Bearer tokens, so Lax does not break the
+    // panel, and it keeps the session cookie out of cross-site POSTs.
+    'same_site' => 'lax',
 
 ];

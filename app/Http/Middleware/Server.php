@@ -50,6 +50,12 @@ class Server
             throw new ApiException('Server does not exist');
         }
 
+        // Fix (v1.0.1): a disabled node must not be able to report traffic
+        // or pull users, even with the (global) server token.
+        if (!$serverInfo->enabled) {
+            throw new ApiException('Server is disabled', 403);
+        }
+
         $request->attributes->set('node_info', $serverInfo);
 
         return $next($request);

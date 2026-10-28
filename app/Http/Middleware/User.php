@@ -22,6 +22,13 @@ class User
         if (!Auth::guard('sanctum')->check()) {
             throw new ApiException('未登录或登陆已过期', 403);
         }
+        // Fix (v1.0.1): a ban must take effect immediately, not only at the
+        // next login. Previously a banned user with a live Sanctum token
+        // could keep calling user APIs until the token expired.
+        $user = Auth::guard('sanctum')->user();
+        if ($user && $user->banned) {
+            throw new ApiException('账号已被封禁', 403);
+        }
         return $next($request);
     }
 }

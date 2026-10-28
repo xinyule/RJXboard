@@ -21,10 +21,16 @@ add_safe_directory() {
 add_safe_directory "$repo_root"
 add_safe_directory "$repo_root/public/assets/admin"
 
+# Fix (v1.0.1): back up the database and .env before running this script;
+# it resets the working tree. Dependencies are now installed from the
+# locked versions (composer install) instead of deleting composer.lock
+# and running composer update, which could silently pull unreviewed
+# dependency versions on every update.
 git fetch --all && git reset --hard origin/master && git pull origin master
-rm -rf composer.lock composer.phar
-wget https://github.com/composer/composer/releases/latest/download/composer.phar -O composer.phar
-php composer.phar update -vvv
+if [ ! -f composer.phar ]; then
+  wget https://github.com/composer/composer/releases/latest/download/composer.phar -O composer.phar
+fi
+php composer.phar install --no-dev -vvv
 git submodule update --init --recursive --force
 php artisan xboard:update
 

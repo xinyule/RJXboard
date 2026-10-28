@@ -189,5 +189,7 @@ return [
     | The only modification by laravel config
     |
     */
-    'version' => '1.0.0'
+    // v1.0.1: security and correctness fixes (payment callback status and
+    // amount checks, node/session revocation, concurrency and logic fixes).
+    'version' => '1.0.1'
 ];
