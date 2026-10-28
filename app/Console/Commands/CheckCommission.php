@@ -66,12 +66,23 @@ class CheckCommission extends Command
         foreach ($orders as $order) {
             try{
                 DB::beginTransaction();
-                if (!$this->payHandle($order->invite_user_id, $order)) {
+                // Fix (v1.0.1): re-read the order with a row lock inside the
+                // transaction and re-check commission_status. Previously two
+                // concurrent runs could both read status=1 and pay twice;
+                // withoutOverlapping alone does not stop manual or multi-
+                // machine runs. The lock serialises payers; the re-check
+                // makes the second one skip instead of double-paying.
+                $lockedOrder = Order::lockForUpdate()->find($order->id);
+                if (!$lockedOrder || (int) $lockedOrder->commission_status !== 1) {
                     DB::rollBack();
                     continue;
                 }
-                $order->commission_status = 2;
-                if (!$order->save()) {
+                if (!$this->payHandle($lockedOrder->invite_user_id, $lockedOrder)) {
+                    DB::rollBack();
+                    continue;
+                }
+                $lockedOrder->commission_status = 2;
+                if (!$lockedOrder->save()) {
                     DB::rollBack();
                     continue;
                 }

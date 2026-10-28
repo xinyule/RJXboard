@@ -102,12 +102,33 @@ class Plugin extends AbstractPlugin implements PaymentInterface
         $invoiceDetail = file_get_contents($this->getConfig('btcpay_url') . 'api/v1/stores/' . $this->getConfig('btcpay_storeId') . '/invoices/' . $json_param['invoiceId'], false, $context);
         $invoiceDetail = json_decode($invoiceDetail, true);
 
+        if (!is_array($invoiceDetail) || empty($invoiceDetail['metadata']["orderId"])) {
+            throw new ApiException('Invalid invoice detail', 400);
+        }
+
+        // Fix (v1.0.1): only a settled invoice may activate an order. Previously
+        // any signed webhook (invoice_created / unpaid / expired) was accepted,
+        // because the invoice status was never read. BTCPay re-sends a webhook
+        // when the invoice later settles, so rejecting early events is safe.
+        if (($invoiceDetail['status'] ?? null) !== 'Settled') {
+            throw new ApiException('Invoice not settled', 400);
+        }
+
         $out_trade_no = $invoiceDetail['metadata']["orderId"];
         $pay_trade_no = $json_param['invoiceId'];
-        
+
+        // Amount in cents, for the controller's amount check. pay() creates the
+        // invoice in CNY, so only trust the amount when the currency matches.
+        $amountCents = null;
+        if (isset($invoiceDetail['amount']) && is_numeric($invoiceDetail['amount'])
+            && (!isset($invoiceDetail['currency']) || $invoiceDetail['currency'] === 'CNY')) {
+            $amountCents = (int) round((float) $invoiceDetail['amount'] * 100);
+        }
+
         return [
             'trade_no' => $out_trade_no,
-            'callback_no' => $pay_trade_no
+            'callback_no' => $pay_trade_no,
+            'amount_cents' => $amountCents,
         ];
     }
 

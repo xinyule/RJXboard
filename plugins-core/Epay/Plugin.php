@@ -110,9 +110,17 @@ class Plugin extends AbstractPlugin implements PaymentInterface
             return false;
         }
 
+        // Amount in cents (gateway reports money in yuan) for the
+        // controller's amount check. trade_status is already gated above.
+        $amountCents = null;
+        if (isset($params['money']) && is_numeric($params['money'])) {
+            $amountCents = (int) round((float) $params['money'] * 100);
+        }
+
         return [
             'trade_no' => $params['out_trade_no'],
-            'callback_no' => $params['trade_no']
+            'callback_no' => $params['trade_no'],
+            'amount_cents' => $amountCents,
         ];
     }
 }

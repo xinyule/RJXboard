@@ -76,6 +76,17 @@ class OrderService
                 throw new ApiException(__('The user does not exist'));
             }
 
+            // Fix (v1.0.1): re-check capacity inside the transaction with
+            // the plan row locked. The pre-transaction validatePurchase()
+            // alone lets two concurrent orders both pass a "1 slot left"
+            // check. (Open-time re-check below is the second line of
+            // defence, because plan_id only changes when an order opens.)
+            $lockedPlan = Plan::lockForUpdate()->find($plan->id);
+            if ($lockedPlan && $user->plan_id !== $lockedPlan->id
+                && !(new PlanService($lockedPlan))->hasCapacity($lockedPlan)) {
+                throw new ApiException(__('Current product is sold out'));
+            }
+
             if ($userService->isNotCompleteOrderByUserId($user->id)) {
                 throw new ApiException(__('You have an unpaid or pending order, please try again later or cancel it'));
             }
@@ -125,7 +136,7 @@ class OrderService
                 return null;
             }
 
-            $plan = Plan::find($order->plan_id);
+            $plan = Plan::lockForUpdate()->find($order->plan_id);
             if (!$plan) {
                 throw new \RuntimeException('订阅不存在');
             }
@@ -133,6 +144,17 @@ class OrderService
             HookManager::call('order.open.before', $order);
 
             $this->user = User::lockForUpdate()->find($order->user_id);
+
+            // Fix (v1.0.1): capacity is enforced again at open time, with
+            // the plan row locked so concurrent opens serialise. Renewals
+            // (user already on this plan) are not counted twice. If this
+            // throws, the order stays PROCESSING for admin handling
+            // (refund / manual open) instead of silently overselling.
+            if ($plan->capacity_limit !== null
+                && $this->user->plan_id !== $plan->id
+                && !(new PlanService($plan))->hasCapacity($plan)) {
+                throw new \RuntimeException('订阅已售罄');
+            }
 
             if ($order->surplus_credit) {
                 $this->user->balance += $order->surplus_credit;
@@ -298,13 +320,26 @@ class OrderService
 
             $orderAmountSum = $orders->sum(fn($item) => $item->total_amount + $item->balance_amount + $item->surplus_amount - $item->surplus_credit);
             $orderMonthSum = $orders->sum(fn($item) => self::STR_TO_TIME[PlanService::getPeriodKey($item->period)] ?? 0);
-            $firstOrderAt = $orders->min('created_at');
-            $expiredAt = Carbon::createFromTimestamp($firstOrderAt)->addMonths($orderMonthSum);
+            // Fix (v1.0.1): do not derive the cycle from first-order +
+            // total months. That calendar span includes any gap between
+            // subscriptions (expired, then re-bought later), inflating
+            // the denominator and systematically under-crediting users
+            // who renewed early or after a gap. Instead: the denominator
+            // is the total paid duration (each order's months, measured
+            // from its own creation date, so month lengths are honoured),
+            // and the numerator is the time actually left on the current
+            // expiry, which getTime() already maintains correctly.
+            $totalSeconds = $orders->sum(function ($item) {
+                $months = self::STR_TO_TIME[PlanService::getPeriodKey($item->period)] ?? 0;
+                if (!$months || !$item->created_at) {
+                    return 0;
+                }
+                return Carbon::createFromTimestamp($item->created_at)->addMonths($months)->timestamp - $item->created_at;
+            });
 
             $now = now();
-            $totalSeconds = $expiredAt->timestamp - $firstOrderAt;
-            $remainSeconds = max(0, $expiredAt->timestamp - $now->timestamp);
-            $cycleRatio = $totalSeconds > 0 ? $remainSeconds / $totalSeconds : 0;
+            $remainSeconds = max(0, $user->expired_at - $now->timestamp);
+            $cycleRatio = $totalSeconds > 0 ? min(1, $remainSeconds / $totalSeconds) : 0;
 
             $plan = Plan::find($user->plan_id);
             $totalTraffic = $plan?->transfer_enable * $orderMonthSum;
@@ -372,6 +407,17 @@ class OrderService
                 if (!$order->save()) {
                     throw new \RuntimeException('Failed to save order status.');
                 }
+                // Fix (v1.0.1): return the coupon quota consumed at order
+                // creation. Previously cancel / expiry burned one global
+                // coupon forever. This path is shared by manual cancel and
+                // by the 2-hour auto-cancel job, so both now return it.
+                if ($order->coupon_id) {
+                    $coupon = \App\Models\Coupon::lockForUpdate()->find($order->coupon_id);
+                    if ($coupon && $coupon->limit_use !== null) {
+                        $coupon->limit_use = $coupon->limit_use + 1;
+                        $coupon->save();
+                    }
+                }
                 if ($order->balance_amount) {
                     $userService = new UserService();
                     if (!$userService->addBalance($order->user_id, $order->balance_amount)) {
@@ -407,13 +453,21 @@ class OrderService
 
     private function buyByPeriod(Order $order, Plan $plan)
     {
+        // Fix (v1.0.1): capture the original expiry BEFORE the upgrade
+        // path overwrites it. One-time plans store expired_at = NULL
+        // (see buyByOneTime), which is exactly the "one-time -> recurring"
+        // case the reset below is meant to catch; previously the upgrade
+        // assignment set expired_at = time() first, so the NULL test could
+        // never be true and the reset was silently skipped, leaving old
+        // usage counted against the new plan's first month.
+        $originalExpiredAt = $this->user->expired_at;
         // change plan process
         if ((int) $order->type === Order::TYPE_UPGRADE) {
             $this->user->expired_at = time();
         }
         $this->user->transfer_enable = $plan->transfer_enable * 1073741824;
         // 从一次性转换到循环或者新购的时候，重置流量
-        if ($this->user->expired_at === NULL || $order->type === Order::TYPE_NEW_PURCHASE)
+        if ($originalExpiredAt === NULL || $order->type === Order::TYPE_NEW_PURCHASE)
             app(TrafficResetService::class)->performReset($this->user, TrafficResetLog::SOURCE_ORDER);
         $this->user->plan_id = $plan->id;
         $this->user->group_id = $plan->group_id;

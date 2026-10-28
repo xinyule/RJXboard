@@ -131,9 +131,25 @@ class Plugin extends AbstractPlugin implements PaymentInterface
             return false;
         }
 
+        // Fix (v1.0.1): fail closed when the callback carries a status field
+        // that is not a success value. NOTE: verify the success token and the
+        // amount unit against one real callback sample from your MGate
+        // gateway before deploying, as this codebase does not document them;
+        // pay() sends total_amount in cents, so that unit is assumed here.
+        $status = $params['trade_status'] ?? $params['status'] ?? $params['pay_status'] ?? null;
+        if ($status !== null && !in_array(strtolower((string) $status), ['trade_success', 'success', 'paid'], true)) {
+            return false;
+        }
+
+        $amountCents = null;
+        if (isset($params['total_amount']) && is_numeric($params['total_amount'])) {
+            $amountCents = (int) $params['total_amount'];
+        }
+
         return [
             'trade_no' => $params['out_trade_no'],
-            'callback_no' => $params['trade_no']
+            'callback_no' => $params['trade_no'],
+            'amount_cents' => $amountCents,
         ];
     }
 }
