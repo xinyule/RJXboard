@@ -34,6 +34,7 @@ RUN apk --no-cache add \
     adduser -S -G www -u 1000 www && \
     (getent group redis || addgroup -S redis) && \
     (getent passwd redis || adduser -S -G redis -H -h /data redis) && \
+    adduser www redis && \
     php -r 'foreach (["swoole", "pcntl", "posix", "bcmath", "pdo_mysql", "pdo_sqlite", "sockets", "zip", "igbinary", "redis"] as $extension) { \
         if (!extension_loaded($extension)) { fwrite(STDERR, "Missing PHP extension: {$extension}\n"); exit(1); } \
     }'
@@ -45,7 +46,10 @@ WORKDIR /www
 COPY .docker /
 
 ARG CACHEBUST=1
-ARG REPO_URL=https://github.com/cedar2025/Xboard
+# Fix (v1.0.1): the default build must be this repository, not upstream.
+# Previously `docker build .` silently built cedar2025/Xboard master and
+# dropped every local fix, including this one.
+ARG REPO_URL=https://github.com/xinyule/RJXboard
 ARG BRANCH_NAME=master
 
 RUN echo "Attempting to clone branch: ${BRANCH_NAME} from ${REPO_URL} with CACHEBUST: ${CACHEBUST}" && \
@@ -59,10 +63,10 @@ COPY .docker/supervisor/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY .docker/caddy/Caddyfile /etc/caddy/Caddyfile
 COPY .docker/php/zz-xboard.ini /usr/local/etc/php/conf.d/zz-xboard.ini
 
-RUN composer install --no-cache --no-dev --no-security-blocking \
+RUN composer install --no-cache --no-dev \
     && php artisan storage:link \
     && chown -R www:www /www \
-    && chmod -R 775 /www \
+    && chmod -R 755 /www \
     && mkdir -p /data \
     && chown redis:redis /data
 
